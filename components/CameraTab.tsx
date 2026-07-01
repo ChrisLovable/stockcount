@@ -1,27 +1,100 @@
 'use client'
 
 import { useRef, useState, useCallback, useEffect } from 'react'
-import type { AIItem } from '@/lib/types'
-import { ConfidenceBadge } from './ui/ConfidenceBadge'
+import type { VisionConsensusResponse } from '@/lib/types'
+import { CountReviewPanel } from './CountReviewPanel'
+import type { VisionItem } from '@/lib/vision/schema'
+
+import type { VisionPrepMode } from '@/lib/images/prepareForVision'
+
+const CAMERA_MAX_IMAGES = 10
 
 interface Props {
   sessionId: string
   instruction: string
-  onItemsAdded: (items: AIItem[]) => void
+  visionMode: VisionPrepMode
+  saving?: boolean
+  onCountConfirmed: (items: VisionItem[], corrected: boolean, countImageId?: string | null) => void
 }
 
-export function CameraTab({ sessionId, instruction, onItemsAdded }: Props) {
+interface CapturedPhoto {
+  id: number
+  dataUrl: string
+}
+
+function CapturedPhotoStrip({
+  photos,
+  onRemove,
+  disabled,
+}: {
+  photos: CapturedPhoto[]
+  onRemove: (id: number) => void
+  disabled?: boolean
+}) {
+  const stripRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (stripRef.current) {
+      stripRef.current.scrollLeft = stripRef.current.scrollWidth
+    }
+  }, [photos.length])
+
+  if (photos.length === 0) return null
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-medium px-1" style={{ color: '#888888' }}>
+        Captured photos ({photos.length}/{CAMERA_MAX_IMAGES})
+      </p>
+      <div ref={stripRef} className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'thin' }}>
+        {photos.map(photo => (
+          <div
+            key={photo.id}
+            className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden"
+            style={{ border: '1px solid #2a2a2a', background: '#1a1a1a' }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photo.dataUrl} alt={`Photo ${photo.id}`} className="w-full h-full object-cover" />
+            <span
+              className="absolute bottom-0 left-0 right-0 text-center text-[9px] font-bold tabular-nums py-0.5"
+              style={{ background: '#000000bb', color: '#fff' }}
+            >
+              {photo.id}
+            </span>
+            {!disabled && (
+              <button
+                type="button"
+                onClick={() => onRemove(photo.id)}
+                className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ background: '#ef4444', color: '#fff' }}
+                aria-label={`Remove photo ${photo.id}`}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function CameraTab({ sessionId, instruction, visionMode, saving, onCountConfirmed }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const instructionRef = useRef(instruction)
+  const photoCountRef = useRef(0)
+
+  instructionRef.current = instruction
+
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment')
-  const [capturedImage, setCapturedImage] = useState<string | null>(null)
-  const [analysing, setAnalysing] = useState(false)
-  const [results, setResults] = useState<AIItem[] | null>(null)
-  const [error, setError] = useState('')
-  const [editItems, setEditItems] = useState<AIItem[]>([])
   const [cameraReady, setCameraReady] = useState(false)
   const [cameraError, setCameraError] = useState('')
+  const [capturedPhotos, setCapturedPhotos] = useState<CapturedPhoto[]>([])
+  const [analysing, setAnalysing] = useState(false)
+  const [result, setResult] = useState<VisionConsensusResponse | null>(null)
+  const [error, setError] = useState('')
+  const [flash, setFlash] = useState(false)
 
   const startCamera = useCallback(async (facing: 'user' | 'environment') => {
     if (streamRef.current) {
@@ -49,55 +122,80 @@ export function CameraTab({ sessionId, instruction, onItemsAdded }: Props) {
     return () => { streamRef.current?.getTracks().forEach(t => t.stop()) }
   }, [facingMode, startCamera])
 
+  // Take a photo WITHOUT stopping the camera — user can keep taking more.
   function capturePhoto() {
-    if (!videoRef.current || !canvasRef.current) return
+    if (!videoRef.current || !cameraReady) return
+    if (photoCountRef.current >= CAMERA_MAX_IMAGES) return
+
     const video = videoRef.current
-    const canvas = canvasRef.current
+    const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
-    canvas.getContext('2d')?.drawImage(video, 0, 0)
-    setCapturedImage(canvas.toDataURL('image/jpeg', 0.85))
-    setResults(null)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0)
+
+    photoCountRef.current += 1
+    const id = photoCountRef.current
+    setCapturedPhotos(prev => [...prev, { id, dataUrl: canvas.toDataURL('image/jpeg', 0.85) }])
+
+    // brief shutter flash for feedback
+    setFlash(true)
+    setTimeout(() => setFlash(false), 120)
+  }
+
+  function removePhoto(id: number) {
+    setCapturedPhotos(prev => {
+      const filtered = prev.filter(p => p.id !== id)
+      photoCountRef.current = filtered.length
+      return filtered.map((p, i) => ({ ...p, id: i + 1 }))
+    })
+  }
+
+  function clearPhotos() {
+    photoCountRef.current = 0
+    setCapturedPhotos([])
+    setResult(null)
     setError('')
   }
 
-  function retake() {
-    setCapturedImage(null)
-    setResults(null)
-    setError('')
-    setEditItems([])
+  function reset() {
+    clearPhotos()
+    setAnalysing(false)
+    startCamera(facingMode)
   }
 
-  async function analysePhoto() {
-    if (!capturedImage) return
+  async function analyseAllPhotos() {
+    if (capturedPhotos.length === 0) return
     setAnalysing(true)
     setError('')
+    setResult(null)
     try {
-      const blob = await (await fetch(capturedImage)).blob()
-      const form = new FormData()
-      form.append('image', blob, 'capture.jpg')
-      form.append('sessionId', sessionId)
-      if (instruction) form.append('instruction', instruction)
-
-      const res = await fetch('/api/count/analyse', { method: 'POST', body: form })
+      const images = capturedPhotos.map(p => p.dataUrl.replace(/^data:image\/\w+;base64,/, ''))
+      const res = await fetch('/api/count/analyse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images,
+          sessionId,
+          instruction: instructionRef.current,
+          burst: images.length > 1,
+          visionMode,
+        }),
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
 
-      setResults(data.items)
-      setEditItems(data.items.map((item: AIItem) => ({ ...item })))
+      setResult(data as VisionConsensusResponse)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed')
     }
     setAnalysing(false)
   }
 
-  function updateItem(index: number, field: keyof AIItem, value: string | number) {
-    setEditItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item))
-  }
-
-  function handleAddToTotal() {
-    onItemsAdded(editItems)
-    retake()
+  function handleConfirm(items: VisionItem[], corrected: boolean, countImageId?: string | null) {
+    onCountConfirmed(items, corrected, countImageId)
+    reset()
   }
 
   if (cameraError) {
@@ -118,45 +216,45 @@ export function CameraTab({ sessionId, instruction, onItemsAdded }: Props) {
     )
   }
 
+  const showLiveCamera = !result && !analysing
+
   return (
     <div className="flex flex-col gap-4">
-      {/* Camera / Preview */}
-      <div className="relative rounded-2xl overflow-hidden" style={{ background: '#000' }}>
-        {!capturedImage ? (
-          <>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full"
-              style={{ display: cameraReady ? 'block' : 'none', aspectRatio: '4/3', objectFit: 'cover' }}
-            />
-            {!cameraReady && (
-              <div className="flex items-center justify-center" style={{ aspectRatio: '4/3' }}>
-                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-              </div>
-            )}
-          </>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={capturedImage} alt="Captured" className="w-full" style={{ aspectRatio: '4/3', objectFit: 'cover' }} />
-        )}
-        <canvas ref={canvasRef} className="hidden" />
-      </div>
+      {showLiveCamera && (
+        <div className="relative rounded-2xl overflow-hidden" style={{ background: '#000' }}>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full"
+            style={{ display: cameraReady ? 'block' : 'none', aspectRatio: '4/3', objectFit: 'cover' }}
+          />
+          {!cameraReady && (
+            <div className="flex items-center justify-center" style={{ aspectRatio: '4/3' }}>
+              <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+          {flash && (
+            <div className="absolute inset-0 bg-white pointer-events-none" style={{ opacity: 0.6 }} />
+          )}
+          {capturedPhotos.length > 0 && (
+            <div
+              className="absolute top-3 right-3 px-3 py-1.5 rounded-full text-sm font-bold tabular-nums"
+              style={{ background: '#000000cc', color: '#fff' }}
+            >
+              {capturedPhotos.length}/{CAMERA_MAX_IMAGES}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Controls */}
-      {!capturedImage ? (
+      {showLiveCamera && (
+        <CapturedPhotoStrip photos={capturedPhotos} onRemove={removePhoto} />
+      )}
+
+      {showLiveCamera && (
         <div className="flex items-center justify-center gap-8">
-          <div className="w-10" />
-          <button
-            onClick={capturePhoto}
-            disabled={!cameraReady}
-            className="w-20 h-20 rounded-full flex items-center justify-center border-4 border-white disabled:opacity-40 transition-opacity active:opacity-70"
-            style={{ background: 'transparent' }}
-          >
-            <div className="w-14 h-14 rounded-full bg-white" />
-          </button>
           <button
             onClick={() => setFacingMode(f => f === 'environment' ? 'user' : 'environment')}
             className="w-10 h-10 rounded-full flex items-center justify-center"
@@ -167,92 +265,79 @@ export function CameraTab({ sessionId, instruction, onItemsAdded }: Props) {
               <path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
-        </div>
-      ) : (
-        <div className="flex gap-3">
           <button
-            onClick={retake}
-            className="flex-1 py-3 rounded-xl font-semibold text-white"
-            style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}
+            onClick={capturePhoto}
+            disabled={!cameraReady || capturedPhotos.length >= CAMERA_MAX_IMAGES}
+            className="w-20 h-20 rounded-full flex items-center justify-center border-4 border-white disabled:opacity-40 transition-opacity active:opacity-70"
+            style={{ background: 'transparent' }}
           >
-            Retake
+            <div className="w-14 h-14 rounded-full bg-white" />
           </button>
+          <div className="w-10 h-10 flex items-center justify-center">
+            {capturedPhotos.length > 0 && (
+              <button
+                onClick={clearPhotos}
+                className="w-10 h-10 rounded-full flex items-center justify-center"
+                style={{ background: '#1a1a1a' }}
+                aria-label="Clear all photos"
+              >
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24">
+                  <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showLiveCamera && capturedPhotos.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-center" style={{ color: '#888888' }}>
+            Take another photo, or analyse what you have.
+          </p>
           <button
-            onClick={analysePhoto}
+            onClick={analyseAllPhotos}
             disabled={analysing}
-            className="flex-1 py-3 rounded-xl font-semibold text-white disabled:opacity-50"
+            className="w-full py-4 rounded-xl font-semibold text-white disabled:opacity-50"
             style={{ background: '#3b82f6' }}
           >
-            {analysing ? 'Analysing...' : 'Analyse'}
+            Analyse {capturedPhotos.length} photo{capturedPhotos.length !== 1 ? 's' : ''}
           </button>
         </div>
       )}
 
-      {/* Loading state */}
+      {showLiveCamera && capturedPhotos.length === 0 && (
+        <p className="text-sm text-center" style={{ color: '#888888' }}>
+          Tap the shutter to capture a photo. Take as many as you need, then analyse them together.
+        </p>
+      )}
+
       {analysing && (
         <div className="flex flex-col items-center gap-3 py-6">
-          <div className="relative w-12 h-12">
-            <div className="absolute inset-0 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-            <div className="pulse-ring absolute inset-0 rounded-full border-2 border-blue-500 opacity-30" />
-          </div>
-          <p className="text-sm font-medium" style={{ color: '#888888' }}>AI is counting...</p>
+          <div className="w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm font-medium" style={{ color: '#888888' }}>
+            Running vision consensus across all photos...
+          </p>
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="px-4 py-3 rounded-xl text-sm" style={{ background: '#ef444422', color: '#ef4444', border: '1px solid #ef444444' }}>
           {error}
         </div>
       )}
 
-      {/* Results */}
-      {results && editItems.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <h3 className="font-semibold text-white">Detected Items</h3>
-          {editItems.map((item, i) => (
-            <div key={i} className="p-4 rounded-xl" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <input
-                  value={item.name}
-                  onChange={e => updateItem(i, 'name', e.target.value)}
-                  className="flex-1 bg-transparent text-white font-medium outline-none border-b border-transparent focus:border-blue-500 pb-0.5"
-                />
-                <ConfidenceBadge confidence={item.confidence} />
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => updateItem(i, 'count', Math.max(0, item.count - 1))}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xl"
-                  style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  value={item.count}
-                  onChange={e => updateItem(i, 'count', parseInt(e.target.value) || 0)}
-                  className="flex-1 text-center text-2xl font-bold text-white bg-transparent outline-none"
-                  min={0}
-                />
-                <button
-                  onClick={() => updateItem(i, 'count', item.count + 1)}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xl"
-                  style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          ))}
-          <button
-            onClick={handleAddToTotal}
-            className="w-full py-4 rounded-xl font-semibold text-white"
-            style={{ background: '#22c55e' }}
-          >
-            Add to Total ({editItems.reduce((s, i) => s + i.count, 0)} units)
+      {result && (
+        <>
+          <CountReviewPanel
+            result={result}
+            saving={saving}
+            onConfirm={handleConfirm}
+          />
+          <button onClick={reset} className="w-full py-3 rounded-xl text-sm font-medium" style={{ color: '#888888' }}>
+            New photos
           </button>
-        </div>
+        </>
       )}
     </div>
   )
