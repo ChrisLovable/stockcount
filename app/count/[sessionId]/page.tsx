@@ -5,17 +5,27 @@ import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { CameraTab } from '@/components/CameraTab'
 import { UploadTab } from '@/components/UploadTab'
+import { VideoTab } from '@/components/VideoTab'
 import type { StockSession, AIItem } from '@/lib/types'
+
+const TABS = [
+  { id: 'camera', label: '📷 Camera' },
+  { id: 'video',  label: '🎥 Video'  },
+  { id: 'upload', label: '📁 Upload' },
+] as const
+
+type Tab = typeof TABS[number]['id']
 
 export default function CountPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const router = useRouter()
   const supabase = createClient()
   const [session, setSession] = useState<StockSession | null>(null)
-  const [tab, setTab] = useState<'camera' | 'upload'>('camera')
+  const [tab, setTab] = useState<Tab>('camera')
   const [total, setTotal] = useState(0)
   const [saving, setSaving] = useState(false)
   const [user, setUser] = useState<{ id: string } | null>(null)
+  const [instruction, setInstruction] = useState('')
 
   useEffect(() => {
     loadSession()
@@ -108,19 +118,66 @@ export default function CountPage() {
 
       {/* Tabs */}
       <div className="flex mx-4 mt-4 rounded-xl p-1 gap-1" style={{ background: '#1a1a1a' }}>
-        {(['camera', 'upload'] as const).map(t => (
+        {TABS.map(t => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className="flex-1 py-2.5 rounded-lg text-sm font-semibold capitalize transition-colors"
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors"
             style={{
-              background: tab === t ? '#3b82f6' : 'transparent',
-              color: tab === t ? '#fff' : '#888888',
+              background: tab === t.id ? '#3b82f6' : 'transparent',
+              color: tab === t.id ? '#fff' : '#888888',
             }}
           >
-            {t === 'camera' ? '📷 Camera' : '📁 Upload'}
+            {t.label}
           </button>
         ))}
+      </div>
+
+      {/* Instruction input — shared across all tabs */}
+      <div className="px-4 pt-3">
+        <label className="block text-xs mb-1.5" style={{ color: '#888888' }}>
+          What should I count?
+        </label>
+        <textarea
+          value={instruction}
+          onChange={e => setInstruction(e.target.value)}
+          placeholder={'e.g. Count every roof tile visible...\nCount the number of cows in the field...\nCount bottles on the shelf only, ignore boxes...'}
+          rows={2}
+          className="w-full text-white text-sm outline-none resize-none placeholder-gray-600 focus:ring-1 focus:ring-blue-500"
+          style={{
+            background: '#1a1a1a',
+            border: '0.5px solid #333',
+            borderRadius: '10px',
+            padding: '10px 12px',
+            fontFamily: 'inherit',
+            lineHeight: '1.5',
+          }}
+        />
+        {/* Quick-select chips */}
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {[
+            'All products on shelf',
+            'Empty shelf gaps',
+            'Damaged items',
+            'Count cattle',
+            'Count people',
+            'Count tiles',
+          ].map(chip => (
+            <button
+              key={chip}
+              onClick={() => setInstruction(prev => prev === chip ? '' : chip)}
+              className="text-xs px-2.5 py-1 rounded-full transition-colors"
+              style={{
+                background: instruction === chip ? '#3b82f6' : '#1a1a1a',
+                border: `0.5px solid ${instruction === chip ? '#3b82f6' : '#333'}`,
+                color: instruction === chip ? '#fff' : '#888888',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tab content */}
@@ -132,11 +189,9 @@ export default function CountPage() {
           </div>
         )}
 
-        {tab === 'camera' ? (
-          <CameraTab sessionId={sessionId} onItemsAdded={handleItemsAdded} />
-        ) : (
-          <UploadTab sessionId={sessionId} onItemsAdded={handleItemsAdded} />
-        )}
+        {tab === 'camera' && <CameraTab sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
+        {tab === 'video'  && <VideoTab  sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
+        {tab === 'upload' && <UploadTab sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
       </div>
     </div>
   )

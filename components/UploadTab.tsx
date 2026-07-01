@@ -6,10 +6,11 @@ import { ConfidenceBadge } from './ui/ConfidenceBadge'
 
 interface Props {
   sessionId: string
+  instruction: string
   onItemsAdded: (items: AIItem[]) => void
 }
 
-export function UploadTab({ sessionId, onItemsAdded }: Props) {
+export function UploadTab({ sessionId, instruction, onItemsAdded }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [analysing, setAnalysing] = useState(false)
@@ -34,6 +35,7 @@ export function UploadTab({ sessionId, onItemsAdded }: Props) {
       const form = new FormData()
       form.append('image', file)
       form.append('sessionId', sessionId)
+      if (instruction) form.append('instruction', instruction)
 
       const res = await fetch('/api/count/analyse', { method: 'POST', body: form })
       const data = await res.json()
