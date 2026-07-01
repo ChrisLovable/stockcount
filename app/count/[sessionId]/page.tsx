@@ -5,12 +5,16 @@ import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { CameraTab } from '@/components/CameraTab'
 import { UploadTab } from '@/components/UploadTab'
-import { VideoTab } from '@/components/VideoTab'
-import type { StockSession, AIItem } from '@/lib/types'
+import { BurstTab } from '@/components/BurstTab'
+import type { StockSession } from '@/lib/types'
+import { visionItemsToSaveRows } from '@/lib/types'
+import type { VisionItem } from '@/lib/vision/schema'
+
+import type { VisionPrepMode } from '@/lib/images/prepareForVision'
 
 const TABS = [
   { id: 'camera', label: '📷 Camera' },
-  { id: 'video',  label: '🎥 Video'  },
+  { id: 'burst',  label: '⚡ Burst'  },
   { id: 'upload', label: '📁 Upload' },
 ] as const
 
@@ -26,6 +30,12 @@ export default function CountPage() {
   const [saving, setSaving] = useState(false)
   const [user, setUser] = useState<{ id: string } | null>(null)
   const [instruction, setInstruction] = useState('')
+  const [visionMode, setVisionMode] = useState<VisionPrepMode>('deep')
+
+  useEffect(() => {
+    if (tab === 'burst') setVisionMode('fast')
+    else setVisionMode('deep')
+  }, [tab])
 
   useEffect(() => {
     loadSession()
@@ -49,14 +59,29 @@ export default function CountPage() {
     setTotal(data.total_units)
   }
 
-  async function handleItemsAdded(items: AIItem[]) {
+  async function handleCountConfirmed(
+    items: VisionItem[],
+    corrected: boolean,
+    countImageId?: string | null,
+  ) {
     if (!user || !session) return
     setSaving(true)
     try {
+      const rows = visionItemsToSaveRows(items).map(row => ({
+        ...row,
+        manually_adjusted: corrected,
+      }))
       const res = await fetch('/api/count/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, items, userId: user.id }),
+        body: JSON.stringify({
+          sessionId,
+          items: rows,
+          userId: user.id,
+          countImageId,
+          userCorrected: corrected,
+          userCorrectedItems: corrected ? items : undefined,
+        }),
       })
       const data = await res.json()
       if (data.session) setTotal(data.session.total_units)
@@ -133,15 +158,45 @@ export default function CountPage() {
         ))}
       </div>
 
+      {/* Vision quality mode */}
+      <div className="px-4 pt-3">
+        <label className="block text-xs mb-1.5" style={{ color: '#888888' }}>
+          Analysis mode
+        </label>
+        <div className="flex rounded-xl p-1 gap-1" style={{ background: '#1a1a1a' }}>
+          {([
+            { id: 'fast' as const, label: 'Fast Count', hint: '1024px · 70% quality' },
+            { id: 'deep' as const, label: 'Deep Check', hint: '1280px · 80% quality' },
+          ]).map(m => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setVisionMode(m.id)}
+              className="flex-1 py-2.5 px-2 rounded-lg text-left transition-colors"
+              style={{
+                background: visionMode === m.id ? '#3b82f6' : 'transparent',
+              }}
+            >
+              <span className="block text-sm font-semibold" style={{ color: visionMode === m.id ? '#fff' : '#ccc' }}>
+                {m.label}
+              </span>
+              <span className="block text-[10px] mt-0.5" style={{ color: visionMode === m.id ? '#dbeafe' : '#666' }}>
+                {m.hint}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Instruction input — shared across all tabs */}
       <div className="px-4 pt-3">
         <label className="block text-xs mb-1.5" style={{ color: '#888888' }}>
-          What should I count?
+          Notes for this count (optional)
         </label>
         <textarea
           value={instruction}
           onChange={e => setInstruction(e.target.value)}
-          placeholder={'e.g. Count every roof tile visible...\nCount the number of cows in the field...\nCount bottles on the shelf only, ignore boxes...'}
+          placeholder={'e.g. Aisle 3 — snack shelf top row only\nSingle shelf section — do not combine aisles\nEnd cap display — cereal boxes'}
           rows={2}
           className="w-full text-white text-sm outline-none resize-none placeholder-gray-600 focus:ring-1 focus:ring-blue-500"
           style={{
@@ -156,12 +211,12 @@ export default function CountPage() {
         {/* Quick-select chips */}
         <div className="flex flex-wrap gap-1.5 mt-2">
           {[
-            'All products on shelf',
-            'Empty shelf gaps',
-            'Damaged items',
-            'Count cattle',
-            'Count people',
-            'Count tiles',
+            'Single shelf only',
+            'Full aisle section',
+            'End cap display',
+            'Loose items only',
+            'Cases / cartons',
+            'Cooler shelf',
           ].map(chip => (
             <button
               key={chip}
@@ -189,9 +244,33 @@ export default function CountPage() {
           </div>
         )}
 
-        {tab === 'camera' && <CameraTab sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
-        {tab === 'video'  && <VideoTab  sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
-        {tab === 'upload' && <UploadTab sessionId={sessionId} instruction={instruction} onItemsAdded={handleItemsAdded} />}
+        {tab === 'camera' && (
+          <CameraTab
+            sessionId={sessionId}
+            instruction={instruction}
+            visionMode={visionMode}
+            saving={saving}
+            onCountConfirmed={handleCountConfirmed}
+          />
+        )}
+        {tab === 'burst' && (
+          <BurstTab
+            sessionId={sessionId}
+            instruction={instruction}
+            visionMode={visionMode}
+            saving={saving}
+            onCountConfirmed={handleCountConfirmed}
+          />
+        )}
+        {tab === 'upload' && (
+          <UploadTab
+            sessionId={sessionId}
+            instruction={instruction}
+            visionMode={visionMode}
+            saving={saving}
+            onCountConfirmed={handleCountConfirmed}
+          />
+        )}
       </div>
     </div>
   )

@@ -5,6 +5,16 @@ import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import type { StockSession } from '@/lib/types'
 
+const C = {
+  bg: '#0a0a0a',
+  card: '#1a1a1a',
+  border: '#2a2a2a',
+  primary: '#3b82f6',
+  muted: '#888888',
+  dim: '#555555',
+  white: '#ffffff',
+}
+
 export default function DashboardClient() {
   const [sessions, setSessions] = useState<StockSession[]>([])
   const [loading, setLoading] = useState(true)
@@ -21,17 +31,26 @@ export default function DashboardClient() {
   }, [])
 
   async function loadSessions() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { router.push('/'); return }
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        router.push('/')
+        return
+      }
 
-    const { data } = await supabase
-      .from('stock_sessions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
+      const { data, error } = await supabase
+        .from('stock_sessions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
 
-    setSessions(data || [])
-    setLoading(false)
+      if (error) throw error
+      setSessions(data || [])
+    } catch (err) {
+      console.error('Failed to load sessions:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function createSession(e: React.FormEvent) {
@@ -39,19 +58,27 @@ export default function DashboardClient() {
     if (!newName.trim()) return
     setCreating(true)
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
 
-    const { data } = await supabase
-      .from('stock_sessions')
-      .insert({ session_name: newName.trim(), location: newLocation.trim() || null, user_id: user.id })
-      .select()
-      .single()
+      const { data, error } = await supabase
+        .from('stock_sessions')
+        .insert({
+          session_name: newName.trim(),
+          location: newLocation.trim() || null,
+          user_id: user.id,
+        })
+        .select()
+        .single()
 
-    if (data) {
-      router.push(`/count/${data.id}`)
+      if (error) throw error
+      if (data) router.push(`/count/${data.id}`)
+    } catch (err) {
+      console.error('Failed to create session:', err)
+    } finally {
+      setCreating(false)
     }
-    setCreating(false)
   }
 
   async function handleSignOut() {
@@ -64,47 +91,122 @@ export default function DashboardClient() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: '#0a0a0a' }}>
+    <div style={{ minHeight: '100dvh', background: C.bg, color: C.white, display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-4 border-b" style={{ background: '#0a0a0aee', borderColor: '#2a2a2a', backdropFilter: 'blur(12px)' }}>
-        <div className="flex items-center gap-3">
-          <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg" style={{ background: '#3b82f6' }}>
-            <svg width="16" height="16" viewBox="0 0 40 40" fill="none">
+      <header
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '16px',
+          borderBottom: `1px solid ${C.border}`,
+          background: 'rgba(10,10,10,0.95)',
+          backdropFilter: 'blur(12px)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: C.primary,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 40 40" fill="none" aria-hidden>
               <rect x="6" y="8" width="28" height="5" rx="2" fill="white" />
               <rect x="6" y="18" width="20" height="5" rx="2" fill="white" />
               <rect x="6" y="28" width="24" height="5" rx="2" fill="white" />
             </svg>
           </span>
-          <span className="font-bold text-white text-lg">StockCount</span>
+          <span style={{ fontWeight: 700, fontSize: 18, color: C.white }}>StockCount</span>
         </div>
-        <button onClick={handleSignOut} className="text-sm px-3 py-1.5 rounded-lg" style={{ color: '#888888', background: '#1a1a1a' }}>
+        <button
+          type="button"
+          onClick={handleSignOut}
+          style={{
+            fontSize: 14,
+            padding: '6px 12px',
+            borderRadius: 8,
+            color: C.muted,
+            background: C.card,
+            border: `1px solid ${C.border}`,
+          }}
+        >
           Sign out
         </button>
-      </div>
+      </header>
 
-      <div className="max-w-lg mx-auto px-4 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-white">Stock Counts</h1>
+      <main style={{ flex: 1, width: '100%', maxWidth: 512, margin: '0 auto', padding: '24px 16px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 24,
+            gap: 12,
+          }}
+        >
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: C.white, margin: 0 }}>Stock Counts</h1>
           <button
+            type="button"
             onClick={() => setShowNew(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-white text-sm"
-            style={{ background: '#3b82f6' }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 16px',
+              borderRadius: 12,
+              fontWeight: 600,
+              fontSize: 14,
+              color: C.white,
+              background: C.primary,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
           >
-            <svg width="16" height="16" fill="none" viewBox="0 0 16 16">
+            <svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden>
               <path d="M8 3v10M3 8h10" stroke="white" strokeWidth="2" strokeLinecap="round" />
             </svg>
             New Count
           </button>
         </div>
 
-        {/* New session modal */}
         {showNew && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-6" style={{ background: '#000000cc' }}>
-            <div className="w-full max-w-lg rounded-2xl p-6" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-              <h2 className="text-xl font-bold text-white mb-5">New Stock Count</h2>
-              <form onSubmit={createSession} className="flex flex-col gap-4">
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 50,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'center',
+              padding: '0 16px 24px',
+              background: 'rgba(0,0,0,0.8)',
+            }}
+          >
+            <div
+              style={{
+                width: '100%',
+                maxWidth: 512,
+                borderRadius: 16,
+                padding: 24,
+                background: C.card,
+                border: `1px solid ${C.border}`,
+              }}
+            >
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: C.white, margin: '0 0 20px' }}>New Stock Count</h2>
+              <form onSubmit={createSession} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div>
-                  <label className="block text-sm mb-2" style={{ color: '#888888' }}>Session Name *</label>
+                  <label style={{ display: 'block', fontSize: 14, marginBottom: 8, color: C.muted }}>
+                    Session Name *
+                  </label>
                   <input
                     type="text"
                     value={newName}
@@ -112,35 +214,65 @@ export default function DashboardClient() {
                     placeholder="e.g. Weekly Count - Aisle 3"
                     required
                     autoFocus
-                    className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-600 outline-none focus:ring-2 focus:ring-blue-500"
-                    style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: 12,
+                      color: C.white,
+                      background: C.bg,
+                      border: `1px solid ${C.border}`,
+                      outline: 'none',
+                    }}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm mb-2" style={{ color: '#888888' }}>Location</label>
+                  <label style={{ display: 'block', fontSize: 14, marginBottom: 8, color: C.muted }}>
+                    Location
+                  </label>
                   <input
                     type="text"
                     value={newLocation}
                     onChange={e => setNewLocation(e.target.value)}
                     placeholder="e.g. Warehouse B"
-                    className="w-full px-4 py-3 rounded-xl text-white placeholder-gray-600 outline-none focus:ring-2 focus:ring-blue-500"
-                    style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      borderRadius: 12,
+                      color: C.white,
+                      background: C.bg,
+                      border: `1px solid ${C.border}`,
+                      outline: 'none',
+                    }}
                   />
                 </div>
-                <div className="flex gap-3 pt-2">
+                <div style={{ display: 'flex', gap: 12, paddingTop: 8 }}>
                   <button
                     type="button"
                     onClick={() => setShowNew(false)}
-                    className="flex-1 py-3 rounded-xl font-semibold text-white"
-                    style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
+                    style={{
+                      flex: 1,
+                      padding: '12px 0',
+                      borderRadius: 12,
+                      fontWeight: 600,
+                      color: C.white,
+                      background: C.bg,
+                      border: `1px solid ${C.border}`,
+                    }}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={creating}
-                    className="flex-1 py-3 rounded-xl font-semibold text-white disabled:opacity-50"
-                    style={{ background: '#3b82f6' }}
+                    style={{
+                      flex: 1,
+                      padding: '12px 0',
+                      borderRadius: 12,
+                      fontWeight: 600,
+                      color: C.white,
+                      background: C.primary,
+                      opacity: creating ? 0.5 : 1,
+                    }}
                   >
                     {creating ? 'Creating...' : 'Start Counting'}
                   </button>
@@ -150,53 +282,115 @@ export default function DashboardClient() {
           </div>
         )}
 
-        {/* Sessions list */}
         {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+            <div
+              className="spinner"
+              style={{
+                width: 32,
+                height: 32,
+                border: '2px solid #3b82f6',
+                borderTopColor: 'transparent',
+                borderRadius: '50%',
+              }}
+            />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: '#1a1a1a' }}>
-              <svg width="32" height="32" fill="none" viewBox="0 0 32 32">
+          <div style={{ textAlign: 'center', padding: '80px 16px' }}>
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 16,
+                background: C.card,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 16px',
+              }}
+            >
+              <svg width="32" height="32" fill="none" viewBox="0 0 32 32" aria-hidden>
                 <rect x="6" y="6" width="20" height="4" rx="2" fill="#2a2a2a" />
                 <rect x="6" y="14" width="14" height="4" rx="2" fill="#2a2a2a" />
                 <rect x="6" y="22" width="16" height="4" rx="2" fill="#2a2a2a" />
               </svg>
             </div>
-            <p className="font-semibold text-white mb-1">No counts yet</p>
-            <p className="text-sm" style={{ color: '#888888' }}>Tap &quot;New Count&quot; to get started</p>
+            <p style={{ fontWeight: 600, color: C.white, margin: '0 0 4px' }}>No counts yet</p>
+            <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Tap &quot;New Count&quot; to get started</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {sessions.map(session => (
               <button
                 key={session.id}
-                onClick={() => router.push(session.status === 'completed' ? `/count/${session.id}/report` : `/count/${session.id}`)}
-                className="w-full text-left p-4 rounded-xl transition-opacity hover:opacity-80"
-                style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}
+                type="button"
+                onClick={() =>
+                  router.push(
+                    session.status === 'completed'
+                      ? `/count/${session.id}/report`
+                      : `/count/${session.id}`,
+                  )
+                }
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: 16,
+                  borderRadius: 12,
+                  background: C.card,
+                  border: `1px solid ${C.border}`,
+                  color: C.white,
+                }}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${session.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'}`} />
-                      <span className="font-semibold text-white truncate">{session.session_name}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          flexShrink: 0,
+                          background: session.status === 'completed' ? '#22c55e' : C.primary,
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          color: C.white,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {session.session_name}
+                      </span>
                     </div>
                     {session.location && (
-                      <p className="text-sm mb-2 truncate" style={{ color: '#888888' }}>{session.location}</p>
+                      <p
+                        style={{
+                          fontSize: 14,
+                          color: C.muted,
+                          margin: '0 0 8px',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {session.location}
+                      </p>
                     )}
-                    <p className="text-xs" style={{ color: '#555555' }}>{formatDate(session.created_at)}</p>
+                    <p style={{ fontSize: 12, color: C.dim, margin: 0 }}>{formatDate(session.created_at)}</p>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className="text-2xl font-bold text-white">{session.total_units}</div>
-                    <div className="text-xs" style={{ color: '#888888' }}>units</div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: C.white }}>{session.total_units}</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>units</div>
                   </div>
                 </div>
               </button>
             ))}
           </div>
         )}
-      </div>
+      </main>
     </div>
   )
 }

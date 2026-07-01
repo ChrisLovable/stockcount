@@ -1,48 +1,59 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import type { AIItem } from '@/lib/types'
-import { ConfidenceBadge } from './ui/ConfidenceBadge'
+import type { VisionConsensusResponse } from '@/lib/types'
+import { CountReviewPanel } from './CountReviewPanel'
+import type { VisionItem } from '@/lib/vision/schema'
+
+import type { VisionPrepMode } from '@/lib/images/prepareForVision'
 
 interface Props {
   sessionId: string
   instruction: string
-  onItemsAdded: (items: AIItem[]) => void
+  visionMode: VisionPrepMode
+  saving?: boolean
+  onCountConfirmed: (items: VisionItem[], corrected: boolean, countImageId?: string | null) => void
 }
 
-export function UploadTab({ sessionId, instruction, onItemsAdded }: Props) {
+export function UploadTab({ sessionId, instruction, visionMode, saving, onCountConfirmed }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [analysing, setAnalysing] = useState(false)
-  const [results, setResults] = useState<AIItem[] | null>(null)
-  const [editItems, setEditItems] = useState<AIItem[]>([])
+  const [result, setResult] = useState<VisionConsensusResponse | null>(null)
   const [error, setError] = useState('')
   const [dragging, setDragging] = useState(false)
 
-  async function analyseFile(file: File) {
+  function selectFile(file: File) {
     if (!file.type.match(/image\/(jpeg|png|webp)/)) {
       setError('Please upload a JPG, PNG, or WEBP image')
       return
     }
+    setError('')
+    setResult(null)
+    setSelectedFile(file)
     const reader = new FileReader()
     reader.onload = e => setPreview(e.target?.result as string)
     reader.readAsDataURL(file)
+  }
 
+  async function analyseSelected() {
+    if (!selectedFile) return
     setAnalysing(true)
     setError('')
-    setResults(null)
+    setResult(null)
     try {
       const form = new FormData()
-      form.append('image', file)
+      form.append('image', selectedFile)
       form.append('sessionId', sessionId)
+      form.append('visionMode', visionMode)
       if (instruction) form.append('instruction', instruction)
 
       const res = await fetch('/api/count/analyse', { method: 'POST', body: form })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Analysis failed')
 
-      setResults(data.items)
-      setEditItems(data.items.map((item: AIItem) => ({ ...item })))
+      setResult(data as VisionConsensusResponse)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed')
     }
@@ -51,39 +62,31 @@ export function UploadTab({ sessionId, instruction, onItemsAdded }: Props) {
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (file) analyseFile(file)
+    if (file) selectFile(file)
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragging(false)
     const file = e.dataTransfer.files?.[0]
-    if (file) analyseFile(file)
-  }
-
-  function updateItem(index: number, field: keyof AIItem, value: string | number) {
-    setEditItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item))
-  }
-
-  function handleAddToTotal() {
-    onItemsAdded(editItems)
-    setPreview(null)
-    setResults(null)
-    setEditItems([])
-    setError('')
+    if (file) selectFile(file)
   }
 
   function reset() {
     setPreview(null)
-    setResults(null)
-    setEditItems([])
+    setSelectedFile(null)
+    setResult(null)
     setError('')
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  function handleConfirm(items: VisionItem[], corrected: boolean, countImageId?: string | null) {
+    onCountConfirmed(items, corrected, countImageId)
+    reset()
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      {/* Drop zone */}
       {!preview ? (
         <div
           onClick={() => fileRef.current?.click()}
@@ -113,14 +116,36 @@ export function UploadTab({ sessionId, instruction, onItemsAdded }: Props) {
         <div className="relative rounded-2xl overflow-hidden" style={{ background: '#000' }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={preview} alt="Preview" className="w-full" style={{ maxHeight: 300, objectFit: 'contain' }} />
+          {!result && (
+            <button
+              onClick={reset}
+              className="absolute top-3 right-3 w-8 h-8 rounded-full flex items-center justify-center"
+              style={{ background: '#000000aa' }}
+            >
+              <svg width="16" height="16" fill="none" viewBox="0 0 16 16">
+                <path d="M12 4L4 12M4 4l8 8" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+
+      {preview && !result && (
+        <div className="flex gap-3">
           <button
             onClick={reset}
-            className="absolute top-3 right-3 w-8 h-8 rounded-full flex items-center justify-center"
-            style={{ background: '#000000aa' }}
+            className="flex-1 py-3 rounded-xl font-semibold text-white"
+            style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}
           >
-            <svg width="16" height="16" fill="none" viewBox="0 0 16 16">
-              <path d="M12 4L4 12M4 4l8 8" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            Choose another
+          </button>
+          <button
+            onClick={analyseSelected}
+            disabled={analysing}
+            className="flex-1 py-3 rounded-xl font-semibold text-white disabled:opacity-50"
+            style={{ background: '#3b82f6' }}
+          >
+            {analysing ? 'Analysing...' : 'Analyse'}
           </button>
         </div>
       )}
@@ -133,70 +158,23 @@ export function UploadTab({ sessionId, instruction, onItemsAdded }: Props) {
         className="hidden"
       />
 
-      {/* Loading */}
       {analysing && (
         <div className="flex flex-col items-center gap-3 py-6">
-          <div className="relative w-12 h-12">
-            <div className="absolute inset-0 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-          </div>
-          <p className="text-sm font-medium" style={{ color: '#888888' }}>AI is counting...</p>
+          <div className="w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm font-medium" style={{ color: '#888888' }}>
+            Running vision consensus...
+          </p>
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="px-4 py-3 rounded-xl text-sm" style={{ background: '#ef444422', color: '#ef4444', border: '1px solid #ef444444' }}>
           {error}
         </div>
       )}
 
-      {/* Results */}
-      {results && editItems.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <h3 className="font-semibold text-white">Detected Items</h3>
-          {editItems.map((item, i) => (
-            <div key={i} className="p-4 rounded-xl" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <input
-                  value={item.name}
-                  onChange={e => updateItem(i, 'name', e.target.value)}
-                  className="flex-1 bg-transparent text-white font-medium outline-none border-b border-transparent focus:border-blue-500 pb-0.5"
-                />
-                <ConfidenceBadge confidence={item.confidence} />
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => updateItem(i, 'count', Math.max(0, item.count - 1))}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xl"
-                  style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
-                >
-                  -
-                </button>
-                <input
-                  type="number"
-                  value={item.count}
-                  onChange={e => updateItem(i, 'count', parseInt(e.target.value) || 0)}
-                  className="flex-1 text-center text-2xl font-bold text-white bg-transparent outline-none"
-                  min={0}
-                />
-                <button
-                  onClick={() => updateItem(i, 'count', item.count + 1)}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xl"
-                  style={{ background: '#0a0a0a', border: '1px solid #2a2a2a' }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          ))}
-          <button
-            onClick={handleAddToTotal}
-            className="w-full py-4 rounded-xl font-semibold text-white"
-            style={{ background: '#22c55e' }}
-          >
-            Add to Total ({editItems.reduce((s, i) => s + i.count, 0)} units)
-          </button>
-        </div>
+      {result && (
+        <CountReviewPanel result={result} saving={saving} onConfirm={handleConfirm} />
       )}
     </div>
   )
